@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "video-subtitles"
+version = "0.1.0"
+description = "AI Agent-powered automatic video transcription, translation, and subtitle generation"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "video-subtitles contributors"},
+]
+keywords = ["video", "subtitles", "whisper", "translation", "ai-agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Text Processing",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+apple = [
+    "mlx-whisper",
+    "imageio-ffmpeg",
+]
+cpu = [
+    "faster-whisper",
+    "imageio-ffmpeg",
+]
+all = [
+    "mlx-whisper",
+    "faster-whisper",
+    "imageio-ffmpeg",
+]
+
+[project.urls]
+Homepage = "https://github.com/wangjianqi/video-subtitles"
+Repository = "https://github.com/wangjianqi/video-subtitles"
+Issues = "https://github.com/wangjianqi/video-subtitles/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -1,0 +1,14 @@
+{
+  "video": "/absolute/path/to/video.mp4",
+  "duration": 123.45,
+  "source_language": "en",
+  "target_language": "zh",
+  "preview": false,
+  "segments": [
+    {"id": 1, "start": 0.5, "end": 3.2, "text": "Hello everyone, welcome to our channel."},
+    {"id": 2, "start": 3.5, "end": 6.0, "text": "Today we have an exciting topic to discuss."},
+    {"id": 3, "start": 6.2, "end": 9.8, "text": "Let's dive right into it."},
+    {"id": 4, "start": 10.0, "end": 13.5, "text": "First, let me give you a brief introduction."},
+    {"id": 5, "start": 13.8, "end": 17.2, "text": "This technology has been developing rapidly."}
+  ]
+}
