@@ -1,6 +1,6 @@
 ---
 name: video-subtitles
-description: 自动识别本地视频对白、由 Agent 翻译并添加中文字幕或英文字幕，输出 SRT、带字幕视频及用于社交平台发布的标题和内容简介。适用于英文视频加中文、中文视频加英文及双语字幕任务。
+description: 自动识别本地视频对白、由 Agent 翻译并添加中文字幕或英文字幕，输出 SRT、带字幕视频及用于社交平台发布的标题、内容简介和封面挑选。适用于英文视频加中文、中文视频加英文及双语字幕任务。
 ---
 
 <!--
@@ -75,11 +75,29 @@ uv run --with imageio-ffmpeg python "$SKILL_DIR/scripts/subtitles.py" render --s
 
 `scope` 为 `full` 或 `preview`；`platform` 记录用户指定平台或 `general`。Markdown 分别列出推荐标题、简介、备选标题，预览文案额外注明“仅基于预览片段”。交付前回读两个文件，确认主题、人物归属、事实和语言与译文一致。此步骤只生成文案，不自动发布到社交平台。
 
+## 封面挑选（低 token）
+
+默认随发布文案挑选一张封面；仅字幕任务或用户不需要封面时跳过。优先从原视频抽帧，避免新增字幕遮挡画面。复用已读译文与发布标题，不为封面重新加载全部文稿。封面默认保存原画面，不自动加字或裁切。
+
+```bash
+uv run --with imageio-ffmpeg python "$SKILL_DIR/scripts/cover.py" sample "/path/video.mp4" --output-dir "/path/output/cover-candidates"
+```
+
+脚本默认在视频 8%、24%、40%、56%、72%、88% 处各抽一帧，拼成最多 1440×540 的 `contact-sheet.jpg`。Agent **只看这一张拼图**，按从左至右、从上至下对应 ID 1–6；时间点见小文件 `candidates.json`。优先主题相关、人物表情自然或主体清晰、构图完整的画面，排除黑屏、转场、明显模糊、闭眼和遮挡。不要仅按清晰度选择与标题无关的帧，也不要声称穷尽比较整片最佳画面。
+
+若已知关键内容时间点，可用 `--times 12 28 45` 指定最多 6 个候选。只有首轮全部不合适或主题关键画面缺失时，允许再抽最多 3 帧，使用新目录。默认最多查看两张拼图和最终封面一张，不逐个打开全部候选，不全文 OCR，不调用额外视觉模型或生成图片。
+
+```bash
+uv run --with imageio-ffmpeg python "$SKILL_DIR/scripts/cover.py" export --manifest "/path/output/cover-candidates/candidates.json" --select 3 --reason "主体清晰，画面与视频主题一致" --output-dir "/path/output/final"
+```
+
+导出原尺寸 `cover.jpg` 和记录时间点及简短选取理由的 `cover.json`。只对最终封面做一次高清确认；不可用时可换一个现有候选，不重复扩展采样。用户指定封面比例时按实际需要另行裁切，并确认主体仍完整；默认保持源画幅。只获得预览视频时明确封面来自预览范围。向用户给出封面文件和一句选取理由即可。
+
 ## 验证与交付
 
 脚本验证译文数量、ID、非空文本、时间轴边界，并检查输出视频时长。Agent 还应抽查开头、中段、结尾有对白的画面，确认字体、换行、遮挡和同步；回读 SRT，检查漏译和术语。默认播放并抽听短段确认声音；工具无法视觉或听觉验证时说明范围。
 
-交付 `subtitled.mp4`、`subtitles.srt`、`publish-copy.md` 和 `publish-copy.json`（仅字幕任务可省略文案），保留 `source.json` 和 `translation.json` 方便修订。报告实际完成的文件链接，以及识别、翻译和验证的局限。源文件不覆盖，已有输出会拒绝写入。运行中断后的目录可能含部分文件，重试使用新目录。
+交付 `subtitled.mp4`、`subtitles.srt`、`publish-copy.md` 和 `publish-copy.json`、`cover.jpg` 和 `cover.json`（仅字幕任务可省略文案和封面），保留 `source.json` 和 `translation.json` 方便修订。报告实际完成的文件链接，以及识别、翻译和验证的局限。源文件不覆盖，已有输出会拒绝写入。运行中断后的目录可能含部分文件，重试使用新目录。
 
 ## 代理与模型下载
 

@@ -386,3 +386,14 @@ Agent 完成翻译后，默认根据完整视频对白与译文生成推荐标�
 使用 $video-subtitles 给 x.mp4 加中文字幕，同时生成适合 B站发布的中文标题和简介。
 根据已有 translation.json 生成小红书发布文案，标题不超过 20 字，简介简洁自然。
 ```
+
+## 低 token 封面挑选
+
+Agent 默认从最多 6 个时间点抽帧，查看一张候选拼图，再确认一张最终封面。仅在首轮无合适画面时补最多 3 帧，不逐帧分析，不调用额外视觉服务。输出原尺寸 `cover.jpg` 及记录时间点和选取理由的 `cover.json`。
+
+```bash
+uv run --with imageio-ffmpeg python scripts/cover.py sample video.mp4 --output-dir output/candidates
+uv run --with imageio-ffmpeg python scripts/cover.py export --manifest output/candidates/candidates.json --select 3 --reason "主体清晰且符合主题" --output-dir output/final
+```
+
+支持 `sample --times 12 28 45` 指定候选时间点。默认保留原画幅、不叠加标题，发布平台有比例要求时再裁切。

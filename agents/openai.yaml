@@ -1,4 +1,4 @@
 interface:
   display_name: "视频翻译字幕"
-  short_description: "识别并翻译视频对白，生成字幕视频及社交平台发布标题和内容简介"
-  default_prompt: "使用 $video-subtitles 给这个视频添加目标语言字幕，并输出带字幕视频、SRT、社交平台标题和内容简介。"
+  short_description: "识别并翻译视频对白，生成字幕视频及社交平台发布标题、内容简介和封面"
+  default_prompt: "使用 $video-subtitles 给这个视频添加目标语言字幕，并输出带字幕视频、SRT、社交平台标题、内容简介和合适的封面。"
