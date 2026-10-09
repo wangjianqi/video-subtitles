@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import wave
+from functools import lru_cache
 
 
 def run(args, **kwargs):
@@ -78,26 +79,21 @@ def transcribe(a):
             import numpy as np
             with wave.open(str(audio), 'rb') as wav:
                 samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
-            result = mlx_whisper.transcribe(samples, path_or_hf_repo=a.model or 'mlx-community/whisper-small-mlx', language=None if a.source_lang == 'auto' else a.source_lang, task='transcribe', word_timestamps=True)
+            result = mlx_whisper.transcribe(samples, path_or_hf_repo=a.model or 'mlx-community/whisper-small-mlx', language=None if a.source_lang == 'auto' else a.source_lang, task='transcribe', word_timestamps=True, verbose=False)
             lang, raw = result['language'], result['segments']
         else:
             from faster_whisper import WhisperModel
             model = WhisperModel(a.model or 'small', device='cpu', compute_type='int8')
             segments, result = model.transcribe(str(audio), language=None if a.source_lang == 'auto' else a.source_lang, task='transcribe', vad_filter=True, word_timestamps=True)
             lang = result.language
-            raw = [dict(start=s.start, end=s.end, text=s.text, words=[dict(start=w.start, end=w.end, word=w.word) for w in (s.words or [])]) for s in segments]
+            raw, reported = [], 0
+            for segment in segments:
+                raw.append(dict(start=segment.start, end=segment.end, text=segment.text, words=[dict(start=w.start, end=w.end, word=w.word) for w in (segment.words or [])]))
+                if segment.end >= reported + 30:
+                    print(f'已识别至 {segment.end:.0f} 秒', file=sys.stderr, flush=True)
+                    reported = segment.end
     duration = min(float(info['format']['duration']), a.limit_seconds or float('inf'))
-    cues = []
-    for s in raw:
-        # 按词级时间拆长段；英文约 12 词、中文约 24 字，最多约 6 秒。
-        words = s.get('words') or [dict(start=s['start'], end=s['end'], word=s['text'])]
-        group = []
-        for w in words:
-            if group and (float(w['end']) - float(group[0]['start']) > 6 or len(''.join(x['word'] for x in group)) >= (24 if lang == 'zh' else 72)):
-                append_cue(cues, group, duration)
-                group = []
-            group.append(w)
-        append_cue(cues, group, duration)
+    cues = segment_cues(raw, lang, duration)
     if not cues:
         raise ValueError('未识别到有效对白；请检查音轨、模型及语言参数')
     target_lang = a.target_lang or ('zh' if lang == 'en' else 'en' if lang == 'zh' else None)
@@ -105,7 +101,7 @@ def transcribe(a):
         raise ValueError(f'检测到 {lang}，请明确 --target-lang')
     data = dict(video=str(video), duration=duration, source_language=lang, target_language=target_lang, preview=bool(a.limit_seconds), segments=cues)
     save(source, data)
-    save(target, dict(target_language=target_lang, segments=[dict(id=s['id'], text='') for s in cues]))
+    save(target, dict(target_language=target_lang, segments=[dict(id=s['id'], source_text=s['text'], text='') for s in cues]))
     print(json.dumps(dict(source=str(source), translation=str(target), segments=len(cues), source_language=lang), ensure_ascii=False))
 
 
@@ -119,6 +115,70 @@ def append_cue(cues, words, duration):
         cues.append(dict(id=len(cues) + 1, start=start, end=end, text=text))
 
 
+def segment_cues(raw, lang, duration):
+    # 汇总连续片段后切分，避免 Whisper 原始 segment 边界制造碎条。
+    cues, group = [], []
+    limit = 24 if lang == 'zh' else 72
+    for segment in raw:
+        words = segment.get('words') or [dict(start=segment['start'], end=segment['end'], word=segment['text'])]
+        for word in words:
+            gap = group and float(word['start']) - float(group[-1]['end']) > 0.8
+            overflow = group and (float(word['end']) - float(group[0]['start']) > 6 or len(''.join(w['word'] for w in group)) + len(word['word']) > limit)
+            if gap or overflow:
+                # 优先回退到最近的标点；无标点才按完整词边界切。
+                boundary = next((i + 1 for i in range(len(group)-1, -1, -1) if re.search(r'[.,!?;:，。！？；：]["”\']?$', group[i]['word'].strip())), len(group))
+                append_cue(cues, group[:boundary], duration)
+                group = group[boundary:]
+            word = dict(word)
+            if lang != 'zh' and group and group[-1]['word'][-1:].isalnum() and word['word'][:1].isalnum():
+                word['word'] = ' ' + word['word']
+            group.append(word)
+            if re.search(r'[.!?。！？]["”\']?$', word['word'].strip()):
+                append_cue(cues, group, duration)
+                group = []
+    append_cue(cues, group, duration)
+    return merge_short_cues(cues, lang)
+
+
+def merge_short_cues(cues, lang):
+    cues = [dict(cue) for cue in cues]
+    i = 0
+    while i < len(cues):
+        cue = cues[i]
+        short = cue['end'] - cue['start'] < 0.4 or len(cue['text'].strip()) < 4
+        continuation = (lang == 'en' and i > 0 and cue['end'] - cue['start'] < 1.2
+                        and len(cue['text'].split()) <= 3
+                        and not re.search(r'[.!?]$', cues[i-1]['text']))
+        if short or continuation:
+            # 不跨明显静音合并，也不让正常短回答无限扩成长字幕。
+            candidates = [j for j in (i-1, i+1) if 0 <= j < len(cues)
+                          and max(cue['end'], cues[j]['end']) - min(cue['start'], cues[j]['start']) <= 8
+                          and max(cue['start'], cues[j]['start']) - min(cue['end'], cues[j]['end']) <= 0.8]
+            if candidates:
+                j = i-1 if continuation and i-1 in candidates else min(candidates, key=lambda j: abs(cues[j]['start'] - cue['start']))
+                left, right = sorted((i, j))
+                first, last = cues[left], cues[right]
+                cues[left] = dict(id=0, start=first['start'], end=last['end'], text=first['text'] + ('' if lang == 'zh' else ' ') + last['text'])
+                del cues[right]
+                i = max(0, left - 1)
+                continue
+        i += 1
+    for i, cue in enumerate(cues, 1):
+        cue['id'] = i
+    return cues
+
+
+def default_font():
+    return {'darwin': 'PingFang SC', 'win32': 'Microsoft YaHei'}.get(sys.platform, 'Noto Sans CJK SC')
+
+
+def warn_layout(text, language, cue_id):
+    limit = 22 if language == 'zh' else 42
+    lines = text.splitlines()
+    if len(lines) > 2 or any(len(line) > limit for line in lines):
+        print(f'警告：字幕 ID {cue_id} 超过建议的两行 / 每行 {limit} 字，请精炼或按语义换行', file=sys.stderr)
+
+
 def stamp(seconds):
     ms = round(seconds * 1000)
     hours, ms = divmod(ms, 3600000)
@@ -127,6 +187,7 @@ def stamp(seconds):
     return f'{hours:02}:{minutes:02}:{secs:02},{ms:03}'
 
 
+@lru_cache(maxsize=3)
 def ffmpeg_for(mode):
     candidates = [os.environ.get('SUBTITLE_FFMPEG'), shutil.which('ffmpeg')]
     try:
@@ -158,7 +219,9 @@ def render(a):
         text = t['text'].strip()
         if not text or '\n\n' in text or '\r' in text or '\x00' in text or '-->' in text:
             raise ValueError(f'空译文或非法字幕文本：ID {s["id"]}')
+        warn_layout(text, source['target_language'], s['id'])
         if a.bilingual:
+            warn_layout(s['text'], source['source_language'], s['id'])
             text += '\n' + s['text'].strip().replace('\n', ' ')
         blocks.append(f'{s["id"]}\n{stamp(start)} --> {stamp(end)}\n{text}\n')
     out = Path(a.output_dir).resolve()
@@ -174,10 +237,32 @@ def render(a):
             if a.mode == 'soft':
                 cmd += ['-i', 'captions.srt', '-map', '0:v:0', '-map', '0:a?', '-map', '1:0', '-c:v', 'copy', '-c:a', 'copy', '-c:s', 'mov_text', '-metadata:s:s:0', 'language=' + {'zh':'zho', 'en':'eng'}.get(source['target_language'], 'und'), '-disposition:s:0', 'default']
             else:
-                if any(x in a.font for x in "'\\,:;[]"):
+                font = a.font
+                font_file = Path(a.font_file).expanduser() if a.font_file else None
+                if font_file and not font_file.is_file():
+                    raise ValueError(f'字体文件不存在：{font_file}')
+                if sys.platform == 'darwin' and not font_file and font == 'PingFang SC':
+                    pingfang = Path('/System/Library/Fonts/PingFang.ttc')
+                    fallback = Path('/System/Library/Fonts/Supplemental/Arial Unicode.ttf')
+                    if pingfang.is_file():
+                        font_file = pingfang
+                    elif fallback.is_file():
+                        font, font_file = 'Arial Unicode MS', fallback
+                        print('警告：未发现 PingFang.ttc，使用已安装的 Arial Unicode MS 字体文件', file=sys.stderr)
+                    else:
+                        raise ValueError('未发现默认中文字体文件；请通过 --font-file 指定支持中文的字体，并用 --font 指定其字体族名')
+                font_filter = ''
+                if font_file:
+                    fonts = Path(tmp) / 'fonts'
+                    fonts.mkdir()
+                    shutil.copyfile(font_file, fonts / ('subtitle' + font_file.suffix))
+                    font_filter = ':fontsdir=fonts'
+                if any(x in font for x in "'\\,:;[]"):
                     raise ValueError('字体名包含不支持的滤镜分隔符')
-                style = f'FontName={a.font},FontSize={a.font_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,MarginV={a.margin_v}'
-                cmd += ['-map', '0:v:0', '-map', '0:a?', '-vf', f"subtitles=captions.srt:force_style='{style}'", '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k']
+                style = f'FontName={font},FontSize={a.font_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=2,Shadow=0,MarginV={a.margin_v}'
+                cmd += ['-map', '0:v:0', '-map', '0:a?', '-vf', f"subtitles=captions.srt{font_filter}:force_style='{style}'", '-c:v', 'libx264', '-crf', '18', '-preset', 'medium', '-pix_fmt', 'yuv420p', '-c:a', a.audio_codec]
+                if a.audio_codec == 'aac':
+                    cmd += ['-b:a', '192k']
             if source.get('preview'):
                 cmd += ['-t', str(duration)]
             run(cmd + ['-movflags', '+faststart', video], cwd=tmp)
@@ -204,7 +289,9 @@ def main():
     r.add_argument('--output-dir', required=True)
     r.add_argument('--mode', choices=['burn', 'soft', 'srt'], default='burn')
     r.add_argument('--bilingual', action='store_true')
-    r.add_argument('--font', default='Arial Unicode MS')
+    r.add_argument('--font', default=default_font())
+    r.add_argument('--audio-codec', choices=['copy', 'aac'], default='copy', help='烧录默认复制音频；不兼容 MP4 的源音频可选 aac')
+    r.add_argument('--font-file', help='显式加载 TTF/OTF/TTC 字体文件，配合 --font 字体族名')
     r.add_argument('--font-size', type=int, default=22)
     r.add_argument('--margin-v', type=int, default=24)
     a = p.parse_args()
@@ -213,6 +300,8 @@ def main():
             raise ValueError('--limit-seconds 必须大于零')
         (transcribe if a.command == 'transcribe' else render)(a)
     except (ValueError, OSError, subprocess.CalledProcessError, ImportError) as e:
+        if 'socksio' in str(e):
+            print('SOCKS 代理依赖缺失：在 uv run 中添加 --with \"httpx[socks]\" 后重试', file=sys.stderr)
         print(f'失败：{e}', file=sys.stderr)
         sys.exit(1)
 

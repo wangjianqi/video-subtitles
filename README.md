@@ -20,7 +20,7 @@
   - **SRT 字幕文件** — 标准格式，便于后期编辑
   - **双语字幕** — 同时显示原文和译文
 - 🔄 **完整工作流** — 从识别、翻译到渲染验证的一站式解决方案
-- 🛡️ **无损输出** — 源视频不被覆盖，所有产物输出到独立目录
+- 🛡️ **保护源文件** — 源视频不被覆盖，所有产物输出到独立目录
 - 🔧 **高度可配置** — 支持自定义模型、字体、字号、边距等参数
 
 ## 🏗️ 架构概览
@@ -89,7 +89,7 @@ cd video-subtitles
 
 ```bash
 # Apple Silicon (英文视频 → 中文)
-uv run --with mlx-whisper --with imageio-ffmpeg \
+uv run --with mlx-whisper --with imageio-ffmpeg --with "httpx[socks]" \
   python scripts/subtitles.py transcribe "/path/to/video.mp4" \
   --source-lang en --target-lang zh \
   --output-dir "./output/video-zh"
@@ -156,7 +156,7 @@ uv run --with imageio-ffmpeg \
 想快速预览效果？使用 `--limit-seconds` 只处理前 N 秒：
 
 ```bash
-uv run --with mlx-whisper --with imageio-ffmpeg \
+uv run --with mlx-whisper --with imageio-ffmpeg --with "httpx[socks]" \
   python scripts/subtitles.py transcribe "/path/to/video.mp4" \
   --source-lang en --target-lang zh \
   --output-dir "./output/preview" \
@@ -186,7 +186,7 @@ uv run --with mlx-whisper --with imageio-ffmpeg \
 | `--output-dir` | ✅ | — | 输出目录 |
 | `--mode` | ❌ | `burn` | 输出模式（`burn`, `soft`, `srt`） |
 | `--bilingual` | ❌ | `false` | 同时显示原文和译文 |
-| `--font` | ❌ | `Arial Unicode MS` | 字幕字体（需已安装） |
+| `--font` | ❌ | 按平台选择 | 字幕字体（需已安装） |
 | `--font-size` | ❌ | `22` | 字号 |
 | `--margin-v` | ❌ | `24` | 底部边距（ASS 画布单位） |
 
@@ -285,7 +285,7 @@ A: 直接 Ctrl+C 即可。已写入的文件可以安全删除，重新运行时
   - **SRT Subtitle File** — Standard format for easy editing
   - **Bilingual Subtitles** — Show both original and translation
 - 🔄 **Complete Workflow** — All-in-one solution from transcription through translation to rendering
-- 🛡️ **Lossless Output** — Source video is never overwritten; all outputs go to separate directories
+- 🛡️ **保护源文件** — Source video is never overwritten; all outputs go to separate directories
 - 🔧 **Highly Configurable** — Customizable model, font, font size, margin, and more
 
 ### 🏗️ Architecture
@@ -347,7 +347,7 @@ git clone https://github.com/wangjianqi/video-subtitles.git
 cd video-subtitles
 
 # Step 1: Transcribe
-uv run --with mlx-whisper --with imageio-ffmpeg \
+uv run --with mlx-whisper --with imageio-ffmpeg --with "httpx[socks]" \
   python scripts/subtitles.py transcribe "video.mp4" \
   --source-lang en --target-lang zh \
   --output-dir "./output/video-zh"
@@ -367,3 +367,11 @@ For more details, see the Chinese section above.
 ### 📄 License
 
 [MIT License](LICENSE)
+## 代理、字体与音频说明
+
+- 使用 SOCKS 代理时，识别命令须包含 `--with "httpx[socks]"`，否则模型下载可能报 `socksio` 缺失。
+- 官方模型站点无法连接时，可自行选择第三方下载镜像：`HF_ENDPOINT=https://hf-mirror.com uv run ...`，或使用 `--model` 指向本地模型；不自动改写全局配置。
+- 默认字体：macOS 为 PingFang SC，Linux 为 Noto Sans CJK SC，Windows 为 Microsoft YaHei。字体仍需安装，输出后抽帧确认字符显示。
+- 烧录只重编码视频，默认复制音频。源音频无法封装到 MP4 时使用 `--audio-codec aac`；烧录视频本身不属于无损输出。
+- 译文模板新增 `source_text`；Agent 只编辑 `text`。旧模板仍然兼容。
+- 过长字幕会输出警告；源对白切分优先标点并合并相邻碎条，明显静音两侧不强行合并。
